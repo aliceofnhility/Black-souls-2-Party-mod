@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 APP_TITLE = "BLACK SOULS II Recruitable Party Mod"
-MOD_NAME = b"BS2 Recruitable Party v0.8.5.2.7"
+MOD_NAME = b"BS2 Recruitable Party v0.8.5.2.8"
 ARCHIVE_NAME = "Game.rgss3a"
 ARCHIVE_BACKUP_SUFFIX = ".bs2partymod_backup"
 SCRIPTS_ENTRY_NAME = "data/scripts.rvdata2"

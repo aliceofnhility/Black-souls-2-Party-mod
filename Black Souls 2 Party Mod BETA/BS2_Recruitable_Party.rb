@@ -684,9 +684,10 @@ module BS2PartyMod
 
   def self.node_level_candidates
     return [] unless $game_party
+    # Every active eligible party member may be selected, including Node.
+    # Node leveling herself is intentional for the Party Mod.
     ($game_party.battle_members rescue $game_party.members).select do |a|
-      key=key_for_actor(a)
-      key != 11  # Node herself cannot be trained through Node.
+      !a.nil?
     end
   end
 
