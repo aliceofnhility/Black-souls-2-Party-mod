@@ -138,6 +138,23 @@ module BS2PartyMod
     false
   end
 
+  def self.global_ai?
+    !!(sys && sys.instance_variable_get(:@bs2pm_global_ai))
+  rescue
+    false
+  end
+
+  def self.set_global_ai(value)
+    sys.instance_variable_set(:@bs2pm_global_ai,!!value)
+    # Clear any pending Leaf takeover roll when AI is enabled.
+    if value
+      leaf=actor(28) rescue nil
+      leaf.instance_variable_set(:@bs2pm_leaf_takeover_turn,false) if leaf
+    end
+    show(value ? "Ally AI enabled." : "Ally AI disabled.")
+    log("Room of Reminiscence: global ally AI #{value ? 'ON' : 'OFF'}")
+  end
+
   def self.unlock_all_recruits
     sys.instance_variable_set(:@bs2pm_unlock_all_recruits,true)
     show("All recruit conditions are now unlocked.")
@@ -224,7 +241,16 @@ module BS2PartyMod
   def self.grimm_base_param_at(level,param_id)
     cls=grimm_playable_class
     return 1 unless cls && cls.respond_to?(:params)
-    v=cls.params[param_id, [[level.to_i,1].max,99].min].to_i
+
+    lv=[[level.to_i,1].max,999].min
+    if lv<=99
+      v=cls.params[param_id,lv].to_i
+    else
+      p99=cls.params[param_id,99].to_i
+      step=cls.params[param_id,99].to_i-cls.params[param_id,98].to_i
+      # BLACK SOULS II's MLV_CHANGE::P_RATE is 105 by default.
+      v=p99+(step*(lv-99)*1.05).truncate
+    end
     [v,1].max
   rescue
     1
@@ -475,6 +501,54 @@ module BS2PartyMod
     refresh_map_followers
     refresh_world_party_npcs
     show("#{name(key)} left the active party.")
+  end
+
+  # Special Party-menu dismissal route for Leaf only.
+  # This deliberately does not alter generic dismissal/removal behavior.
+  def self.dismiss_leaf_to_endless_tea_party
+    return unless in_party?(28)
+
+    # Cycle-local home marker: this is only about where Leaf returns after
+    # being dismissed from the Party menu, not her story/progression state.
+    set_flag(:leaf_party_menu_home_endless)
+
+    $game_party.remove_actor(actor_id(28))
+    refresh_map_followers
+
+    # If currently standing in Fairy Jail, remove the visible Mary/Leaf copies
+    # immediately. Otherwise they will be removed the next time Map060 loads.
+    if ($game_map.map_id rescue 0).to_i==60 &&
+       $game_map.respond_to?(:bs2pm_remove_leaf_after_party_dismiss)
+      $game_map.bs2pm_remove_leaf_after_party_dismiss
+    end
+
+    # If already in Endless Tea Party, create her return NPC immediately.
+    if ($game_map.map_id rescue 0).to_i==156 &&
+       $game_map.respond_to?(:bs2pm_add_relocated_leaf_event)
+      $game_map.bs2pm_add_relocated_leaf_event
+    end
+
+    refresh_world_party_npcs
+    show("#{name(28)} left the active party.")
+  end
+
+  # Endless Tea Party Leaf can be killed after being dismissed there.
+  # She stays gone for the rest of the CURRENT cycle. Clearing the persistent
+  # relocation flag means the NEXT cycle uses her normal Fairy Jail location.
+  def self.kill_endless_tea_party_leaf
+    return unless ($game_map.map_id rescue 0).to_i==156
+
+    set_flag(:leaf_killed_this_cycle)
+    set_flag(:leaf_party_menu_home_endless,false)
+
+    # Undo the persistent relocation for future cycles.
+    set_flag(:leaf_relocated,false,true)
+
+    ev=$game_map.events[990] rescue nil
+    ev.erase if ev
+    $game_map.events.delete(990) rescue nil
+
+    log("Leaf killed in Endless Tea Party; return to Fairy Jail next cycle")
   end
 
   def self.show(text)
@@ -1281,15 +1355,43 @@ class Game_Map
   alias bs2pm_leaf_setup_events setup_events
   def setup_events
     bs2pm_leaf_setup_events
+
+    # Only the Party-menu Leaf dismissal uses this additional home rule.
+    bs2pm_remove_leaf_after_party_dismiss
     bs2pm_add_relocated_leaf_event
+  end
+
+  def bs2pm_remove_leaf_after_party_dismiss
+    return unless @map_id.to_i==60
+    return unless BS2PartyMod.flag(:leaf_party_menu_home_endless) ||
+                  BS2PartyMod.flag(:leaf_killed_this_cycle)
+
+    # Fairy Jail's Leaf/Mary presentation is Event3 with supporting Mary
+    # sequence events 9 and 17. Remove them only after the Party-menu dismissal.
+    [3,9,17].each do |eid|
+      ev=@events[eid] rescue nil
+      next unless ev
+      ev.erase rescue nil
+      @events.delete(eid) rescue nil
+    end
+    BS2PartyMod.log("Party-menu dismissed Leaf suppressed in Fairy Jail")
+  rescue => e
+    BS2PartyMod.log("Party-menu Leaf Fairy Jail suppression failed: #{e.class}: #{e.message}")
   end
 
   def bs2pm_add_relocated_leaf_event
     return unless @map_id.to_i==156
-    return unless BS2PartyMod.flag(:leaf_relocated,true)
+
+    # Existing story relocation still works as before. In addition, a Leaf
+    # dismissed specifically through the Party menu returns here.
+    return if BS2PartyMod.flag(:leaf_killed_this_cycle)
+    return unless BS2PartyMod.flag(:leaf_relocated,true) ||
+                  BS2PartyMod.flag(:leaf_party_menu_home_endless)
+    return if BS2PartyMod.in_party?(28)
     return if @events.values.any?{|e| (e.event.name rescue "").to_s=="BS2PM_LEAF"}
 
-    ev=RPG::Event.new(31,32)
+    # Map156 bonfire Event24 is at (31,35). Leaf returns four tiles above it.
+    ev=RPG::Event.new(31,31)
     ev.id=990 if ev.respond_to?(:id=)
     ev.name="BS2PM_LEAF" if ev.respond_to?(:name=)
     page=RPG::Event::Page.new
@@ -1302,16 +1404,19 @@ class Game_Map
     page.list=[
       RPG::EventCommand.new(101,0,["メアリー",0,0,2]),
       RPG::EventCommand.new(401,0,["\"Hehe, you do love me Grimm.\""]),
-      RPG::EventCommand.new(102,0,[["Recruit","Leave"],1]),
+      # BS2 uses \c[2] for its highlighted hostile/Kill choices.
+      RPG::EventCommand.new(102,0,[["Recruit","\\c[2]Kill\\c[0]","Leave"],2]),
       RPG::EventCommand.new(402,0,[0,"Recruit"]),
       RPG::EventCommand.new(355,1,["BS2PartyMod.recruit(28)"]),
-      RPG::EventCommand.new(402,0,[1,"Leave"]),
+      RPG::EventCommand.new(402,0,[1,"\\c[2]Kill\\c[0]"]),
+      RPG::EventCommand.new(355,1,["BS2PartyMod.kill_endless_tea_party_leaf"]),
+      RPG::EventCommand.new(402,0,[2,"Leave"]),
       RPG::EventCommand.new(404,0,[]),
       RPG::EventCommand.new(0,0,[])
     ]
     ev.pages=[page]
     @events[990]=Game_Event.new(@map_id,ev)
-    BS2PartyMod.log("spawned relocated Leaf at Endless Tea Party x=31 y=32")
+    BS2PartyMod.log("spawned Leaf at Endless Tea Party x=31 y=31")
   rescue => e
     BS2PartyMod.log("relocated Leaf spawn failed: #{e.class}: #{e.message}")
   end
@@ -1628,7 +1733,22 @@ class Game_Actor < Game_Battler
     key=BS2PartyMod.key_for_actor(self)
     return bs2pm_param_base(param_id) unless key
 
-    base=BS2PartyMod.grimm_base_param_at(level,param_id).to_f
+    # Mirror BLACK SOULS II's actual player character (Actor 2).
+    # Temporarily evaluate Actor 2 at this companion's level so we inherit the
+    # game's own class, Lv100+ limit-break growth, and BLACK SOULS-specific
+    # parameter logic without adding our own max-level implementation.
+    player=BS2PartyMod.grimm_actor
+    if player
+      old_level=player.level
+      begin
+        player.instance_variable_set(:@level,level.to_i)
+        base=player.param_base(param_id).to_f
+      ensure
+        player.instance_variable_set(:@level,old_level)
+      end
+    else
+      base=bs2pm_param_base(param_id).to_f
+    end
 
     # Node retains her special Covenant-derived parameters.
     if key==11
@@ -1788,7 +1908,15 @@ class Game_Actor < Game_Battler
 
   alias bs2pm_auto_battle? auto_battle?
   def auto_battle?
+    # Bandersnatch permanently behaves as though Puppet's Ring is equipped.
     return true if BS2PartyMod.key_for_actor(self)==24
+
+    # BLACK SOULS II's Puppet's Ring is the engine Auto Battle special flag
+    # (feature code 62, data_id 0). AI On reproduces that behavior for every
+    # allied actor except the real player character, Actor 2.
+    aid=BS2PartyMod.runtime_actor_id(self).to_i
+    return true if aid!=BS2PartyMod::PLAYER_ID && BS2PartyMod.global_ai?
+
     bs2pm_auto_battle?
   end
 
@@ -1831,8 +1959,19 @@ module BS2PartyMod
       choices << [:guard,nil] if grd && actor.usable?(grd)
     rescue
     end
+    # BLACK SOULS II's "Skill Storage" is implemented by Game_Actor#skill_seal.
+    # Window_SkillList explicitly hides every skill whose ID appears there.
+    # Mirror that exact per-skill rule rather than inferring from skill type.
+    stored=(actor.skill_seal rescue []).to_a.map{|x| x.to_i}
     actor.skills.to_a.each do |sk|
-      choices << [:skill,sk.id] if sk && actor.usable?(sk)
+      next unless sk
+      next if stored.include?(sk.id.to_i)
+
+      # The battle UI also hides Menu Only / Never skills.
+      next if sk.occasion.to_i==2 || sk.occasion.to_i==3
+
+      next unless actor.usable?(sk)
+      choices << [:skill,sk.id]
     end
 
     return false if choices.empty?
@@ -1865,6 +2004,14 @@ class Scene_Battle < Scene_Base
     battler=BattleManager.make_action_orders[0] rescue nil
     return unless battler.is_a?(Game_Actor)
     return unless BS2PartyMod.key_for_actor(battler)==28
+
+    # Global AI already controls Leaf exactly like Puppet's Ring, so her
+    # separate 20% "Let me pick!" takeover is disabled until AI Off.
+    if BS2PartyMod.global_ai?
+      battler.instance_variable_set(:@bs2pm_leaf_takeover_turn,false)
+      return
+    end
+
     return unless battler.ap.to_i >= ATB::MAX_AP.to_i
 
     # process_before_action is the point where the ATB system has selected the
@@ -2456,9 +2603,20 @@ class Game_Interpreter
         # ChoiceEX chains consecutive Show Choices across command_404 and assumes
         # a numeric branch value. Separate our actor picker from vanilla CE35.
         prefix << RPG::EventCommand.new(108,0,["BS2PartyMod level target selected"])
+        node=BS2PartyMod.actor(11) rescue nil
+        node_level_before=node ? node.level.to_i : nil
+
         child=Game_Interpreter.new(@depth+1)
         child.setup(prefix + common_event.list, same_map? ? @event_id : 0)
         child.run
+
+        # If Node was the selected target and genuinely gained a level, she
+        # thanks the real playable character (Actor 2) by their chosen name.
+        if node && node_level_before && node.level.to_i > node_level_before
+          player=BS2PartyMod.grimm_actor
+          pname=player ? player.name.to_s : "Grimm"
+          BS2PartyMod.say(11,"Thank you Lord #{pname}")
+        end
         return
       end
     end
@@ -2506,12 +2664,16 @@ module BS2PartyMod
     page.list=[
       RPG::EventCommand.new(101,0,["",0,0,2]),
       RPG::EventCommand.new(401,0,["Party Mod recruitment tools."]),
-      RPG::EventCommand.new(102,0,[["Unlock all recruits","Undo Progression","Neither"],2]),
+      RPG::EventCommand.new(102,0,[["Unlock all recruits","Undo Progression","AI On","AI Off","Neither"],4]),
       RPG::EventCommand.new(402,0,[0,"Unlock all recruits"]),
       RPG::EventCommand.new(355,1,["BS2PartyMod.unlock_all_recruits"]),
       RPG::EventCommand.new(402,0,[1,"Undo Progression"]),
       RPG::EventCommand.new(355,1,["BS2PartyMod.undo_recruit_progression"]),
-      RPG::EventCommand.new(402,0,[2,"Neither"]),
+      RPG::EventCommand.new(402,0,[2,"AI On"]),
+      RPG::EventCommand.new(355,1,["BS2PartyMod.set_global_ai(true)"]),
+      RPG::EventCommand.new(402,0,[3,"AI Off"]),
+      RPG::EventCommand.new(355,1,["BS2PartyMod.set_global_ai(false)"]),
+      RPG::EventCommand.new(402,0,[4,"Neither"]),
       RPG::EventCommand.new(404,0,[]),
       RPG::EventCommand.new(0,0,[])
     ]
@@ -2592,7 +2754,13 @@ class Scene_BS2PMParty < Scene_MenuBase
     @w.set_handler(:dismiss,method(:do_dismiss))
   end
   def do_dismiss
-    BS2PartyMod.dismiss(@w.current_ext); return_scene
+    key=@w.current_ext
+    if key.to_i==28
+      BS2PartyMod.dismiss_leaf_to_endless_tea_party
+    else
+      BS2PartyMod.dismiss(key)
+    end
+    return_scene
   end
 end
 

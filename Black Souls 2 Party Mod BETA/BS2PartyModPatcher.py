@@ -7,13 +7,15 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 APP_TITLE = "BLACK SOULS II Recruitable Party Mod"
-MOD_NAME = b"BS2 Recruitable Party v0.8.5"
+MOD_NAME = b"BS2 Recruitable Party v0.8.5.2.6"
 ARCHIVE_NAME = "Game.rgss3a"
 ARCHIVE_BACKUP_SUFFIX = ".bs2partymod_backup"
 SCRIPTS_ENTRY_NAME = "data/scripts.rvdata2"
 OYSTER_SPRITE_REL = os.path.join("Graphics","Characters","$カキ.png")
 OYSTER_SPRITE_ENTRY = "graphics/characters/$カキ.png"
 SPRITE_BACKUP_SUFFIX = ".bs2partymod_backup"
+JOIPLAY_SCRIPTS_REL = os.path.join("Data","Scripts.rvdata2")
+JOIPLAY_BACKUP_SUFFIX = ".bs2partymod_backup"
 RGSS3A_HEADER = b"RGSSAD\x00\x03"
 DEFAULT_FILE_MAGIC = 0xDEADCAFE
 
@@ -444,6 +446,94 @@ def install_mod(game_dir):
     sprite_path,sprite_backup=install_sprite(game_dir)
     return path,backup,sprite_path,sprite_backup
 
+def validate_joiplay_game_dir(game_dir):
+    """
+    JoiPlay/RPG Maker Plugin can run the normal VX Ace game folder on Android.
+    This install mode writes loose Data/Graphics files so no Android-side
+    Python executable or RGSS3A rewriting is required.
+    """
+    game_dir=os.path.abspath(game_dir.strip().strip('"'))
+    archive=os.path.join(game_dir,ARCHIVE_NAME)
+    if not os.path.isfile(archive):
+        raise FileNotFoundError(
+            "Game.rgss3a was not found. Select the BLACK SOULS II folder "
+            "that you will copy/use with JoiPlay."
+        )
+    rg=RGSS3AArchive(archive)
+    rg.find_entry(SCRIPTS_ENTRY_NAME)
+    return game_dir
+
+def install_joiplay(game_dir):
+    game_dir=validate_joiplay_game_dir(game_dir)
+
+    source_path=app_resource("BS2_Recruitable_Party.rb")
+    sprite_source=app_resource(OYSTER_SPRITE_REL)
+    if not os.path.isfile(source_path):
+        raise FileNotFoundError("BS2_Recruitable_Party.rb is missing.")
+    if not os.path.isfile(sprite_source):
+        raise FileNotFoundError("Bundled Cheeky Oyster sprite is missing.")
+
+    source=open(source_path,'rb').read()
+
+    # Read the original Scripts.rvdata2 from Game.rgss3a, inject the Party Mod,
+    # then save it as a loose Data/Scripts.rvdata2 file. JoiPlay can use the
+    # loose Data file without modifying the encrypted archive on Android.
+    archive=os.path.join(game_dir,ARCHIVE_NAME)
+    rg=RGSS3AArchive(archive)
+    original=rg.read_entry(rg.find_entry(SCRIPTS_ENTRY_NAME))
+    patched=patch_scripts_bytes(original,source)
+
+    data_path=os.path.join(game_dir,JOIPLAY_SCRIPTS_REL)
+    os.makedirs(os.path.dirname(data_path),exist_ok=True)
+    data_backup=data_path+JOIPLAY_BACKUP_SUFFIX
+    if os.path.isfile(data_path) and not os.path.isfile(data_backup):
+        shutil.copy2(data_path,data_backup)
+    with open(data_path,"wb") as f:
+        f.write(patched)
+
+    # Verify loose scripts contain exactly this mod version.
+    entries=load_scripts_bytes(open(data_path,"rb").read())
+    hits=[x for x in entries if is_our_party_mod(x)]
+    if len(hits)!=1 or zlib.decompress(hits[0][2])!=source:
+        raise RuntimeError("JoiPlay Scripts.rvdata2 verification failed.")
+
+    # Loose Graphics override for the custom Oyster walking sheet.
+    sprite_path=os.path.join(game_dir,OYSTER_SPRITE_REL)
+    os.makedirs(os.path.dirname(sprite_path),exist_ok=True)
+    sprite_backup=sprite_path+JOIPLAY_BACKUP_SUFFIX
+    if os.path.isfile(sprite_path) and not os.path.isfile(sprite_backup):
+        shutil.copy2(sprite_path,sprite_backup)
+    shutil.copy2(sprite_source,sprite_path)
+
+    if open(sprite_path,"rb").read()!=open(sprite_source,"rb").read():
+        raise RuntimeError("JoiPlay Oyster sprite verification failed.")
+
+    return data_path, data_backup if os.path.isfile(data_backup) else None, sprite_path, sprite_backup if os.path.isfile(sprite_backup) else None
+
+def restore_joiplay(game_dir):
+    game_dir=os.path.abspath(game_dir.strip().strip('"'))
+    data_path=os.path.join(game_dir,JOIPLAY_SCRIPTS_REL)
+    data_backup=data_path+JOIPLAY_BACKUP_SUFFIX
+
+    if os.path.isfile(data_backup):
+        shutil.copy2(data_backup,data_path)
+    elif os.path.isfile(data_path):
+        # If there was no pre-existing loose Scripts file, removing ours makes
+        # the game fall back to the copy inside Game.rgss3a.
+        try:
+            entries=load_scripts_bytes(open(data_path,"rb").read())
+            if any(is_our_party_mod(x) for x in entries):
+                os.remove(data_path)
+        except Exception:
+            pass
+
+    sprite=os.path.join(game_dir,OYSTER_SPRITE_REL)
+    sprite_backup=sprite+JOIPLAY_BACKUP_SUFFIX
+    if os.path.isfile(sprite_backup):
+        shutil.copy2(sprite_backup,sprite)
+
+    return data_path
+
 def restore_mod(game_dir):
     game_dir=os.path.abspath(game_dir.strip().strip('"')); path=os.path.join(game_dir,ARCHIVE_NAME); backup=path+ARCHIVE_BACKUP_SUFFIX
     if not os.path.isfile(backup): raise FileNotFoundError("No party-mod archive backup was found.")
@@ -457,7 +547,7 @@ def restore_mod(game_dir):
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title(APP_TITLE); self.geometry("680x380"); self.minsize(620,340)
+        super().__init__(); self.title(APP_TITLE); self.geometry("760x420"); self.minsize(700,380)
         self.game_dir=tk.StringVar(); self.status=tk.StringVar(value="Select the BLACK SOULS II folder containing Game.exe and Game.rgss3a.")
         f=ttk.Frame(self,padding=18); f.pack(fill='both',expand=True)
         ttk.Label(f,text="BLACK SOULS II Recruitable Party Mod",font=("Segoe UI",17,"bold")).pack(anchor='w')
@@ -465,11 +555,14 @@ class App(tk.Tk):
         box=ttk.LabelFrame(f,text="Game Folder",padding=10); box.pack(fill='x')
         row=ttk.Frame(box); row.pack(fill='x'); ttk.Entry(row,textvariable=self.game_dir).pack(side='left',fill='x',expand=True)
         ttk.Button(row,text="Browse...",command=self.browse).pack(side='left',padx=(8,0))
-        note=("Enjoy uwu")
+        note="Enjoy uwu"
         ttk.Label(f,text=note,wraplength=620).pack(anchor='w',pady=(16,10))
         row2=ttk.Frame(f); row2.pack(fill='x')
         ttk.Button(row2,text="Install / Update Party Mod",command=self.install).pack(side='left')
+        ttk.Button(row2,text="Install for JoiPlay",command=self.install_joiplay).pack(side='left',padx=(10,0))
         ttk.Button(row2,text="Restore Previous Archive",command=self.restore).pack(side='left',padx=(10,0))
+        row3=ttk.Frame(f); row3.pack(fill='x',pady=(8,0))
+        ttk.Button(row3,text="Restore JoiPlay Files",command=self.restore_joiplay).pack(side='left')
         st=ttk.LabelFrame(f,text="Status",padding=10); st.pack(fill='both',expand=True,pady=(14,0))
         ttk.Label(st,textvariable=self.status,wraplength=610,justify='left').pack(anchor='nw')
     def browse(self):
@@ -480,6 +573,25 @@ class App(tk.Tk):
             path,backup,sprite,sprite_backup=install_mod(self.game_dir.get()); self.status.set("Installed and verified.\nArchive backup: "+backup+"\nOyster sprite: "+sprite); messagebox.showinfo(APP_TITLE,"Party mod installed successfully.")
         except Exception as e:
             self.status.set("Install failed: "+str(e)); messagebox.showerror(APP_TITLE,str(e))
+    def install_joiplay(self):
+        try:
+            scripts,backup,sprite,sprite_backup=install_joiplay(self.game_dir.get())
+            self.status.set(
+                "JoiPlay install created and verified.\n"
+                "Loose scripts: "+scripts+"\n"
+                "Oyster sprite: "+sprite+"\n"
+                "Copy/use this BLACK SOULS II folder with JoiPlay."
+            )
+            messagebox.showinfo(APP_TITLE,"JoiPlay install files created successfully.")
+        except Exception as e:
+            self.status.set("JoiPlay install failed: "+str(e)); messagebox.showerror(APP_TITLE,str(e))
+    def restore_joiplay(self):
+        try:
+            p=restore_joiplay(self.game_dir.get())
+            self.status.set("Restored/removed JoiPlay loose mod files: "+p)
+            messagebox.showinfo(APP_TITLE,"JoiPlay files restored.")
+        except Exception as e:
+            self.status.set("JoiPlay restore failed: "+str(e)); messagebox.showerror(APP_TITLE,str(e))
     def restore(self):
         try:
             p=restore_mod(self.game_dir.get()); self.status.set("Restored previous archive: "+p); messagebox.showinfo(APP_TITLE,"Previous archive restored.")
