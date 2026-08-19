@@ -1,0 +1,1 @@
+To install drag the data and graphics folders into your folder with the game and have it replace the files (Make a copy of your game folder to be safe if you'd like)
