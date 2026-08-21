@@ -93,7 +93,8 @@ module BS2PartyMod
   }
 
   CUSTOM_SKILL_DESCRIPTIONS = {
-    "Puff of Smoke"=>"Blows smoke across allies increasing overall attack,\nbut causing worsened defense"
+    "Puff of Smoke"=>"Blows smoke across allies increasing overall attack,\nbut causing worsened defense",
+    "Produce Vial"=>"Create a healing vial"
   }
 
   SKILL_ALIASES = {
@@ -111,7 +112,7 @@ module BS2PartyMod
     25=>["Griffin Shield"],26=>["Mock Turtle's Ladle"],27=>["Miranda's Axe"],
     28=>["Mary's Magical Wand","Leaf's Ring"]}
 
-  PERSIST_KEYS = [:end_g,:grand_guignol_end,:all_fairytales,:jubjub_ring,:leaf_relocated,:jabber_20_souls]
+  PERSIST_KEYS = [:end_g,:grand_guignol_end,:all_fairytales,:jubjub_ring,:leaf_relocated,:jabber_20_souls,:mery_spellbook_given]
   JUBJUB_MADNESS_SWITCHES = (475..484).to_a + [566]
 
   def self.log(msg)
@@ -354,6 +355,14 @@ module BS2PartyMod
     s.mp_cost=mp if s.respond_to?(:mp_cost=)
     s.scope=scope if s.respond_to?(:scope=)
     s.stype_id=1 if s.respond_to?(:stype_id=)
+
+    # Produce Vial visually uses Doctor Blackwell's actual healing item.
+    # Base database Item 48: "Blackwell's Blood Vial", icon 649.
+    if name=="Produce Vial"
+      vial=$data_items[48] rescue nil
+      s.icon_index=vial.icon_index if vial && s.respond_to?(:icon_index=)
+    end
+
     if s.respond_to?(:damage) && s.damage
       s.damage.type=0 if s.damage.respond_to?(:type=)
       s.damage.formula="0" if s.damage.respond_to?(:formula=)
@@ -413,6 +422,25 @@ module BS2PartyMod
       actor.instance_variable_set(:@bs2pm_actor_schema,ACTOR_SCHEMA_VERSION)
       log("migrated #{name(key)} actor=#{runtime_actor_id(actor)} class=#{cid} level=#{current_level}")
     end
+    # Existing saves may already have Doctor Blackwell's actor clone polluted
+    # by another NPC's appearance. Repair it every time she is configured.
+    if key.to_i==8
+      actor.instance_variable_set(:@character_name,"$ブラックウェル")
+      actor.instance_variable_set(:@character_index,0)
+      actor.instance_variable_set(:@face_name,"ブラ")
+      actor.instance_variable_set(:@face_index,0)
+    elsif key.to_i==20
+      actor.instance_variable_set(:@character_name,"$ビクトリア")
+      actor.instance_variable_set(:@character_index,0)
+      actor.instance_variable_set(:@face_name,"ビク")
+      actor.instance_variable_set(:@face_index,0)
+    elsif key.to_i==27
+      actor.instance_variable_set(:@character_name,"$メリフィリア")
+      actor.instance_variable_set(:@character_index,0)
+      actor.instance_variable_set(:@face_name,"me")
+      actor.instance_variable_set(:@face_index,0)
+    end
+
     actor.refresh rescue nil
     actor
   end
@@ -725,12 +753,14 @@ module BS2PartyMod
     [37,53]=>5, [74,13]=>5,                    # Dodo
     [80,14]=>6,                                 # Duchess Margaret - normal Covenant menu
     [320,21]=>7, [320,119]=>7,                 # Lingeriena
+    [34,190]=>8,                                # Doctor Blackwell - Ripon Cathedral
     [101,9]=>11,                                # Node (Dream Library)
     [334,11]=>12, [342,17]=>12, [348,22]=>12, # Unis
     [335,8]=>13, [335,16]=>13, [342,22]=>13,
     [348,23]=>13,                               # Leiden
     [125,10]=>14,                               # Wolris
     [169,8]=>15,                                # Prickett
+    [45,12]=>20,                                # Maid Victoria - Hanover Abandoned Station
     [197,4]=>17,                                # Kuti
     [137,7]=>18,                                # Lorina
     [140,21]=>3,                                # Cheeky Oyster
@@ -740,6 +770,7 @@ module BS2PartyMod
     [27,3]=>26, [27,9]=>26,                    # Mock Turtle
     [133,5]=>24,                                # Bandersnatch
     [180,10]=>23,                               # Jabberwock normal menu
+    [252,16]=>27,                               # Meryphillia / Miranda - home interaction
     [116,13]=>29,                              # Pumpkin-O - home/Pumpkin Base only
     [323,14]=>30,                               # Sackhead Girl
     [43,10]=>22,                               # Jubjub first post-battle menu
@@ -777,11 +808,36 @@ module BS2PartyMod
   end
 
   def self.capture_appearance(key,event_id)
-    # Pumpkin-O and Cheeky Oyster use fixed real NPC walking graphics.
-    # Do not let unrelated/alternate event pages overwrite them.
+    # Fixed real-NPC appearances. Do not let unrelated/alternate event pages
+    # overwrite these actor clones.
+    data=$data_actors[actor_id(key)] rescue nil
+    return unless data
+
+    if key.to_i==8
+      # Doctor Blackwell's real Cathedral NPC is Map034/Event190.
+      data.character_name="$ブラックウェル" if data.respond_to?(:character_name=)
+      data.character_index=0 if data.respond_to?(:character_index=)
+      data.face_name="ブラ" if data.respond_to?(:face_name=)
+      data.face_index=0 if data.respond_to?(:face_index=)
+      return
+    elsif key.to_i==20
+      # Maid Victoria's real NPC is Map045/Event12.
+      data.character_name="$ビクトリア" if data.respond_to?(:character_name=)
+      data.character_index=0 if data.respond_to?(:character_index=)
+      data.face_name="ビク" if data.respond_to?(:face_name=)
+      data.face_index=0 if data.respond_to?(:face_index=)
+      return
+    elsif key.to_i==27
+      # Meryphillia / Miranda's real recruitable NPC is Map252/Event16.
+      data.character_name="$メリフィリア" if data.respond_to?(:character_name=)
+      data.character_index=0 if data.respond_to?(:character_index=)
+      data.face_name="me" if data.respond_to?(:face_name=)
+      data.face_index=0 if data.respond_to?(:face_index=)
+      return
+    end
+
     return if [3,29].include?(key.to_i)
     ev=$game_map.events[event_id] rescue nil; return unless ev
-    data=$data_actors[actor_id(key)] rescue nil; return unless data
     begin
       g=ev.page.graphic
       data.character_name=g.character_name if data.respond_to?(:character_name=) && g.character_name.to_s!=""
@@ -812,6 +868,50 @@ module BS2PartyMod
 
   def self.item_owned?(name)
     x=item(name)||weapon(name)||armor(name); x && $game_party.has_item?(x,true)
+  end
+
+  def self.mery_hidden_body_unlocked?
+    # IMPORTANT: this intentionally ignores every older :mery_hidden_body
+    # flag. Only explicitly giving the spellbook in the new recruitment flow
+    # may satisfy the requirement.
+    !!flag(:mery_spellbook_given,true)
+  end
+
+  def self.mery_hidden_body_book
+    # Different translations/builds can vary slightly in the displayed book
+    # name. Prefer the intended exact name, then identify the inventory item
+    # by the distinctive "Hidden Body" text.
+    book=item("Sorcery Book [Hidden Body]")
+    return book if book
+
+    begin
+      $data_items.compact.find do |it|
+        n=it.name.to_s.downcase
+        n.include?("hidden body") && (n.include?("book") || n.include?("sorcery"))
+      end
+    rescue
+      nil
+    end
+  end
+
+  def self.can_give_mery_hidden_body_spellbook?
+    return false if mery_hidden_body_unlocked?
+    book=mery_hidden_body_book
+    book && $game_party.has_item?(book,true)
+  end
+
+  def self.give_mery_hidden_body_spellbook
+    return unless can_give_mery_hidden_body_spellbook?
+    book=mery_hidden_body_book
+    return unless book
+
+    $game_party.lose_item(book,1,true)
+
+    # This is the ONLY place the new permanent recruitment requirement is set.
+    set_flag(:mery_spellbook_given,true,true)
+
+    say_face("me",0,"Meryphillia","I can finally fight with you again Grimm")
+    log("Meryphillia Hidden Body spellbook explicitly given; permanent unlock set")
   end
 
   def self.hatta_covenant_level
@@ -1020,7 +1120,7 @@ module BS2PartyMod
     when 24 then covenant_level(24)>=3
     when 25 then map_id.to_i==27 && !in_party?(18)
     when 26 then in_party?(25)
-    when 27 then flag(:mery_hidden_body)
+    when 27 then mery_hidden_body_unlocked?
     when 28 then flag(:leaf_relocated,true)
     when 29 then map_id.to_i==116
     when 30 then flag(:sackhead_viscera)
@@ -1068,19 +1168,6 @@ module BS2PartyMod
 
     # Jubjub's Butcher's Ring option is injected directly into her
     # existing NPC menu by the event-list choice patch below.
-
-    # Meryphillia book handoff.
-    if key==27 && !flag(:mery_hidden_body)
-      book=item("Sorcery Book [Hidden Body]")
-      if book && $game_party.has_item?(book)
-        if choose("Give Meryphillia the book?",["Give Meryphillia the book","No"])==0
-          $game_party.lose_item(book,1); set_flag(:mery_hidden_body)
-          say(27,"I can use this to hide and still be by your side..")
-          say(27,"Thank you..")
-        end
-      end
-    end
-
 
     # Generic recruitment is appended to the NPC's native Show Choices list
     # by Game_Interpreter#setup_choices below.  Do not open a second choice
@@ -1216,7 +1303,8 @@ module BS2PartyMod
     n=item.name.to_s.downcase
     set_flag(:train_ticket,true,true) if n.include?("train ticket")
     set_flag(:serpent_blood,true,true) if n.include?("blood") && n.include?("serpent")
-    set_flag(:mery_hidden_body) if n.include?("hidden body")
+    # Meryphillia's Hidden Body unlock now happens only when the spellbook
+    # is explicitly given to her through her Map252/Event16 menu.
   end
 
   def self.monitor_battle_victory
@@ -1630,7 +1718,9 @@ class Game_Battler < Game_BattlerBase
     when "Brutal Angel's Lullaby"
       st=BS2PartyMod.state("Power of Darkness"); if st; add_state(st.id); @state_turns[st.id]=10 rescue nil; end
     when "Produce Vial"
-      vial=BS2PartyMod.item_by_fuzzy("Blackwell Vial"); $game_party.gain_item(vial,1) if vial
+      # Grant exactly one of Doctor Blackwell's real healing vials.
+      vial=$data_items[48] rescue nil
+      $game_party.gain_item(vial,1) if vial
     when "Glorpy Purr"
       if actor? && BS2PartyMod.runtime_actor_id(self)==BS2PartyMod::PLAYER_ID
         @bs2pm_glorpy_turns=2
@@ -1995,6 +2085,26 @@ module BS2PartyMod
   def self.leaf_takeover_speak
     say_face("メアリー",0,"Fairy Leaf","Let me pick!")
   end
+
+  def self.clear_prickette_dice_effects
+    battlers=[]
+    begin
+      battlers.concat($game_party.members.to_a) if $game_party
+    rescue
+    end
+    begin
+      battlers.concat($game_troop.members.to_a) if $game_troop
+    rescue
+    end
+
+    battlers.compact.each do |b|
+      b.instance_variable_set(:@bs2pm_dice_mult,nil)
+    end
+
+    prickette=actor(15) rescue nil
+    prickette.instance_variable_set(:@bs2pm_prickett_roll,nil) if prickette
+    log("cleared Prickette dice-roll battle effects")
+  end
 end
 
 class Scene_Battle < Scene_Base
@@ -2065,6 +2175,9 @@ module BattleManager
   class << self
     alias bs2pm_battle_start battle_start
     def battle_start
+      # Defensive cleanup in case a prior battle ended abnormally.
+      BS2PartyMod.clear_prickette_dice_effects rescue nil
+
       bs2pm_battle_start
       if BS2PartyMod.in_party?(15)
         roll=1+rand(6); BS2PartyMod.actor(15).instance_variable_set(:@bs2pm_prickett_roll,roll)
@@ -2074,10 +2187,44 @@ module BattleManager
         $game_message.add("Dice rolled #{roll}.") rescue nil
       end
     end
+
     alias bs2pm_process_victory process_victory
     def process_victory
       BS2PartyMod.monitor_battle_victory
-      bs2pm_process_victory
+      begin
+        bs2pm_process_victory
+      ensure
+        BS2PartyMod.clear_prickette_dice_effects rescue nil
+      end
+    end
+
+    alias bs2pm_process_defeat process_defeat
+    def process_defeat
+      begin
+        bs2pm_process_defeat
+      ensure
+        BS2PartyMod.clear_prickette_dice_effects rescue nil
+      end
+    end
+
+    alias bs2pm_process_abort process_abort
+    def process_abort
+      begin
+        bs2pm_process_abort
+      ensure
+        BS2PartyMod.clear_prickette_dice_effects rescue nil
+      end
+    end
+
+    alias bs2pm_process_escape process_escape
+    def process_escape
+      result=nil
+      begin
+        result=bs2pm_process_escape
+      ensure
+        BS2PartyMod.clear_prickette_dice_effects rescue nil
+      end
+      result
     end
   end
 end
@@ -2095,6 +2242,53 @@ class Game_Interpreter
     patched=list
     begin
       map_id=($game_map.map_id rescue 0).to_i
+
+      # Prickette room entrance mirror event.
+      # With Prickette already recruited, her native room NPC (Event 8 after
+      # transfer) is hidden/frozen. Common Events 188 and 190 try to move that
+      # NPC, and CE190 waits for the route to finish, causing a permanent wait.
+      # Skip only that Prickette-specific entrance choreography and dialogue;
+      # preserve the actual transfer into Map169.
+      if map_id==57 && event_id.to_i==61 && BS2PartyMod.in_party?(15)
+        arr=Marshal.load(Marshal.dump(list))
+        remove=[]
+
+        arr.each_with_index do |cmd,i|
+          next unless cmd
+
+          # Remove CE188/CE190 calls that manipulate hidden room Event 8.
+          if cmd.code.to_i==117 && [188,190].include?((cmd.parameters[0] rescue 0).to_i)
+            remove << i
+            next
+          end
+
+          # Remove Prickette's now-inappropriate surprise text.
+          if cmd.code.to_i==401
+            txt=(cmd.parameters[0] rescue "").to_s
+            if txt.include?("Woah, you spooked me!") ||
+               txt.include?("I thought a cat sneaked in")
+              remove << i
+            end
+          end
+        end
+
+        unless remove.empty?
+          # Also remove the Show Text header for the suppressed two-line block.
+          text_indexes=remove.select{|i| arr[i] && arr[i].code.to_i==401}
+          unless text_indexes.empty?
+            first=text_indexes.min
+            if first>0 && arr[first-1].code.to_i==101 &&
+               (arr[first-1].parameters[0] rescue "").to_s=="プリ"
+              remove << (first-1)
+            end
+          end
+
+          remove.uniq.sort.reverse_each{|i| arr.delete_at(i)}
+          list=arr
+          patched=arr
+          BS2PartyMod.log("skipped recruited-Prickette room entrance choreography map=57 event=61")
+        end
+      end
 
       # Cheeky Oyster + Secret Princess Kuti special interaction.
       # Kuti's real Deep Sea NPC is Map197/Event4.
@@ -2439,6 +2633,124 @@ class Game_Interpreter
         list=arr
       end
 
+      # Meryphillia / Miranda custom recruitment flow.
+      # This is intentionally keyed directly to her verified native event,
+      # rather than depending on generic dialogue/event key detection.
+      if map_id==252 && event_id.to_i==16
+        arr=Marshal.load(Marshal.dump(list))
+
+        # Find her final native invitation menu:
+        # ["Would you come with me?", "Leave"]
+        invite_i=nil
+        arr.each_with_index do |cmd,i|
+          next unless cmd && cmd.code.to_i==102
+          opts=(cmd.parameters[0] rescue []).to_a
+          if opts.any?{|o| o.to_s=="Would you come with me?"}
+            invite_i=i
+            break
+          end
+        end
+
+        # Translation-safe fallback: Event16's recruitment interaction is
+        # the final top-level Show Choices block on the active page.
+        if invite_i.nil?
+          tops=[]
+          arr.each_with_index do |cmd,i|
+            tops << i if cmd && cmd.code.to_i==102 && cmd.indent.to_i==0
+          end
+          invite_i=tops.last unless tops.empty?
+        end
+
+        if invite_i
+          invite=arr[invite_i]
+          indent=invite.indent.to_i
+          opts=invite.parameters[0].clone
+
+          if BS2PartyMod.mery_hidden_body_unlocked?
+            # Replace the native refusal body of "Would you come with me?"
+            # with direct recruitment, keeping the original choice text.
+            branch_i=nil
+            finish_i=nil
+            ((invite_i+1)...arr.length).each do |j|
+              c=arr[j]
+              next unless c
+              if branch_i.nil? && c.code.to_i==402 && c.indent.to_i==indent &&
+                 (c.parameters[0] rescue -1).to_i==0
+                branch_i=j
+                next
+              end
+              if branch_i && c.indent.to_i==indent &&
+                 ((c.code.to_i==402) || (c.code.to_i==404))
+                finish_i=j
+                break
+              end
+            end
+
+            if branch_i && finish_i
+              arr.slice!(branch_i+1,finish_i-branch_i-1)
+              arr.insert(branch_i+1,
+                RPG::EventCommand.new(355,indent+1,["BS2PartyMod.recruit(27)"]))
+              list=arr
+              patched=arr
+              BS2PartyMod.log("Meryphillia invitation choice now recruits directly")
+            end
+
+          elsif BS2PartyMod.can_give_mery_hidden_body_spellbook?
+            # Before unlock, add the explicit spellbook handoff.
+            unless opts.any?{|o| o.to_s=="Give Hidden Body Spellbook"}
+              # VX Ace natively supports at most four choices. The verified
+              # invitation normally has two, so append directly. If a
+              # translation/modded build already has four, create a small
+              # handoff prompt immediately before it instead.
+              if opts.length >= 4
+                pre=[
+                  RPG::EventCommand.new(102,indent,[["Give Hidden Body Spellbook","Continue"],1]),
+                  RPG::EventCommand.new(402,indent,[0,"Give Hidden Body Spellbook"]),
+                  RPG::EventCommand.new(355,indent+1,["BS2PartyMod.give_mery_hidden_body_spellbook"]),
+                  RPG::EventCommand.new(402,indent,[1,"Continue"]),
+                  RPG::EventCommand.new(404,indent,[])
+                ]
+                arr.insert(invite_i,*pre)
+                list=arr
+                patched=arr
+                BS2PartyMod.log("inserted dedicated Meryphillia Hidden Body handoff menu")
+              else
+                spell_index=opts.length
+                opts << "Give Hidden Body Spellbook"
+                invite.parameters[0]=opts
+
+              # Find this Show Choices block's matching 404.
+              finish=nil
+              depth=0
+              ((invite_i+1)...arr.length).each do |j|
+                c=arr[j]
+                next unless c
+                if c.code.to_i==102 && c.indent.to_i==indent
+                  depth+=1
+                elsif c.code.to_i==404 && c.indent.to_i==indent
+                  if depth==0
+                    finish=j
+                    break
+                  else
+                    depth-=1
+                  end
+                end
+              end
+
+              if finish
+                arr.insert(finish,
+                  RPG::EventCommand.new(402,indent,[spell_index,"Give Hidden Body Spellbook"]),
+                  RPG::EventCommand.new(355,indent+1,["BS2PartyMod.give_mery_hidden_body_spellbook"]))
+                list=arr
+                patched=arr
+                BS2PartyMod.log("added Give Hidden Body Spellbook to Meryphillia invitation menu")
+              end
+              end
+            end
+          end
+        end
+      end
+
       additions=[]
 
       # Special non-party unlocks. These are native branches in the NPC's
@@ -2453,6 +2765,12 @@ class Game_Interpreter
       if key && key.to_i.between?(1,30)
         add_recruit=(!BS2PartyMod.in_party?(key) &&
           BS2PartyMod.eligible?(key,map_id,txt))
+
+        # Meryphillia uses her native "Would you come with me?" choice as the
+        # recruit command after the permanent Hidden Body unlock.
+        if key.to_i==27 && map_id==252 && event_id.to_i==16
+          add_recruit=false
+        end
 
         # Never append Recruit to the unresolved two-choice Kuti/Oyster
         # scene or the hostile immediate-battle route. After reconciliation,
@@ -2512,6 +2830,17 @@ class Game_Interpreter
           elsif map_id==156 && [25,26,27].include?(event_id.to_i)
             top=candidates.map{|x| x[1]}.select{|idx| arr[idx].indent.to_i==0}
             target_index=(top.empty? ? candidates.map{|x| x[1]}.min : top.min)
+
+          elsif map_id==252 && event_id.to_i==16 && key.to_i==27
+            # Meryphillia's page contains several separate Show Choices blocks.
+            # Recruitment belongs specifically on her final native invitation:
+            #   "Would you come with me?" / "Leave"
+            invitation=candidates.map{|x| x[1]}.find do |idx|
+              opts=(arr[idx].parameters[0] rescue []).to_a
+              opts.any?{|o| o.to_s.include?("Would you come with me?")}
+            end
+            target_index=invitation || candidates.max_by{|x| [x[0],x[1]]}[1]
+
           else
             target_index=candidates.max_by{|x| [x[0],x[1]]}[1]
           end
